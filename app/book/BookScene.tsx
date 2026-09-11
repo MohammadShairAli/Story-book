@@ -6,12 +6,13 @@
    and the frame loop, never during render, which is the model React Three
    Fiber is built around. */
 
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Canvas, createPortal, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Environment, Lightformer, OrbitControls, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import PhotoSlot, { PHOTO_PAGE_TEXTURE, measurePhotoFrame } from "./PhotoSlot";
 import { soundForTexture, type SoundId } from "./sounds";
-import { CLIP_NAME, MODEL_PATH, STOPS, clampStop, turnRate } from "./timeline";
+import { CLIP_NAME, CLIP_STOPS, MODEL_PATH, STOPS, clampStop, poseAt, turnRate } from "./timeline";
 
 /** The book is rescaled so its widest pose measures this across. */
 const BOOK_WIDTH = 2.6;
@@ -23,8 +24,10 @@ const MARGIN = 1.06;
  * Screen space kept clear for the overlaid header and control bar, so the
  * book is framed in the area between them rather than underneath them.
  */
-const SAFE_TOP_PX = 96;
-const SAFE_BOTTOM_PX = 172;
+const SAFE_TOP_PX = 100;
+/** Below the lg breakpoint the page hint sits under the header, not beside it. */
+const SAFE_TOP_NARROW_PX = 156;
+const SAFE_BOTTOM_PX = 190;
 
 /** Materials that should read as paper rather than as a coated surface. */
 const PAPER = new Set(["1", "2", "3", "4", "5", "6", "White"]);
@@ -36,17 +39,31 @@ const POSE_SAMPLES = 15;
 const PRESS_DEPTH = 0.0024;
 const PRESS_HOLD_MS = 130;
 
+/**
+ * The keepsake photo is shown once the last page's card has swung this far
+ * through its opening turn, far enough to have cleared the pocket beneath.
+ */
+const PHOTO_REVEAL_TIME = THREE.MathUtils.lerp(
+  CLIP_STOPS[CLIP_STOPS.length - 2],
+  CLIP_STOPS[CLIP_STOPS.length - 1],
+  0.45,
+);
+
 /** Where the book should sit horizontally at a clip time, eased between stops. */
 function centreAt(time: number, centres: readonly number[]) {
-  if (time <= STOPS[0]) return centres[0];
-  for (let i = 0; i < STOPS.length - 1; i++) {
-    if (time <= STOPS[i + 1]) {
-      const t = (time - STOPS[i]) / (STOPS[i + 1] - STOPS[i]);
+  if (time <= CLIP_STOPS[0]) return centres[0];
+  for (let i = 0; i < CLIP_STOPS.length - 1; i++) {
+    if (time <= CLIP_STOPS[i + 1]) {
+      const t = (time - CLIP_STOPS[i]) / (CLIP_STOPS[i + 1] - CLIP_STOPS[i]);
       return THREE.MathUtils.lerp(centres[i], centres[i + 1], t * t * (3 - 2 * t));
     }
   }
   return centres[centres.length - 1];
 }
+
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const TIP = new THREE.Quaternion();
 
 type SoundButton = {
   id: SoundId;
@@ -125,14 +142,21 @@ function BookModel({
   stop,
   onSettled,
   onButton,
+  photo,
+  onPhotoChange,
+  photoControls,
 }: {
   stop: number;
   onSettled: () => void;
   onButton?: (id: SoundId) => void;
+  photo: string | null;
+  onPhotoChange: (photo: string | null) => boolean;
+  photoControls: boolean;
 }) {
   const root = useRef<THREE.Group>(null);
   const { scene, animations } = useGLTF(MODEL_PATH);
   const gl = useThree((state) => state.gl);
+  const stage = useThree((state) => state.scene);
   const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
   const size = useThree((state) => state.size);
   const controls = useThree((state) => state.controls) as
@@ -206,7 +230,7 @@ function BookModel({
 
     scene.traverse((object) => {
       const mesh = object as THREE.Mesh;
-      if (!mesh.isMesh) return;
+      if (!mesh.isMesh || mesh.userData.keepsake) return;
 
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -223,13 +247,15 @@ function BookModel({
         if (!standard.isMeshStandardMaterial) continue;
 
         if (PAPER.has(standard.name)) {
+          // Matte paper: a glossy sheen over the print is what washes it out.
           standard.metalness = 0;
-          standard.roughness = 0.66;
+          standard.roughness = 0.82;
+          const physical = standard as THREE.MeshPhysicalMaterial;
+          if (physical.isMeshPhysicalMaterial) physical.specularIntensity = 0.4;
         } else {
           standard.metalness = Math.min(standard.metalness, 0.28);
           standard.roughness = Math.max(standard.roughness, 0.3);
         }
-        standard.envMapIntensity = 0.9;
 
         if (standard.map && !seen.has(standard.map)) {
           seen.add(standard.map);
@@ -253,7 +279,7 @@ function BookModel({
     next.clampWhenFinished = true;
     next.play();
     next.paused = true; // the time is driven by hand, in useFrame
-    next.time = STOPS[0];
+    next.time = CLIP_STOPS[0];
     return next;
   }, [animations, mixer]);
 
@@ -268,7 +294,7 @@ function BookModel({
   const fit = useMemo(() => {
     const settled = new THREE.Box3();
     const swept = new THREE.Box3();
-    const duration = STOPS[STOPS.length - 1];
+    const duration = CLIP_STOPS[CLIP_STOPS.length - 1];
     const restore = action?.time ?? 0;
 
     const sample = (time: number, box: THREE.Box3) => {
@@ -280,7 +306,7 @@ function BookModel({
 
     // Where the book comes to rest ...
     const restingCentres: number[] = [];
-    for (const time of STOPS) {
+    for (const time of CLIP_STOPS) {
       const pose = new THREE.Box3();
       sample(time, pose);
       restingCentres.push(pose.getCenter(new THREE.Vector3()).x);
@@ -328,7 +354,7 @@ function BookModel({
    * --------------------------------------------------------------- */
   useLayoutEffect(() => {
     const isNarrow = size.width < 900;
-    const top = Math.min(SAFE_TOP_PX / size.height, 0.2);
+    const top = Math.min((size.width < 1024 ? SAFE_TOP_NARROW_PX : SAFE_TOP_PX) / size.height, 0.24);
     const bottom = Math.min(SAFE_BOTTOM_PX / size.height, 0.25);
 
     const target = new THREE.Vector3(0, 0, 0);
@@ -377,11 +403,58 @@ function BookModel({
    * turned stay on the left -- and makes a backwards turn free.
    * --------------------------------------------------------------- */
   const turn = useRef({ time: STOPS[0], to: STOPS[0], rate: 1 });
+
+  /** The leaf carrying the photo pocket; the photo is parented to it. */
+  const pocket = useMemo(() => {
+    let found: THREE.Object3D | null = null;
+    scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (found || !mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const onPage = materials.some(
+        (material) => (material as THREE.MeshStandardMaterial).map?.name === PHOTO_PAGE_TEXTURE,
+      );
+      if (onPage) found = mesh;
+    });
+    return found as THREE.Object3D | null;
+  }, [scene]);
+
+  const isPhotoRevealed = useCallback(() => poseAt(turn.current.time).clip >= PHOTO_REVEAL_TIME, []);
+
+  /**
+   * Measure the pocket once, from the second-to-last stop, where the white
+   * card still lies flat over it. Nothing but the card moves after that, so
+   * the measurement holds for the last page.
+   */
+  const photoFrame = useMemo(() => {
+    const mesh = pocket as THREE.SkinnedMesh | null;
+    if (!mesh?.isSkinnedMesh || !action) return null;
+
+    const restore = action.time;
+    action.time = CLIP_STOPS[CLIP_STOPS.length - 2];
+    mixer.update(0);
+    scene.updateMatrixWorld(true);
+    const frame = measurePhotoFrame(mesh);
+
+    action.time = restore;
+    mixer.update(0);
+    return frame;
+  }, [action, mixer, pocket, scene]);
   const onSettledRef = useRef(onSettled);
 
   useEffect(() => {
     onSettledRef.current = onSettled;
   }, [onSettled]);
+
+  // Dev-only: renderer and scene handles, for checking colour and lighting.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const scope = window as unknown as Record<string, unknown>;
+    scope.__bookThree = { gl, scene: stage };
+    return () => {
+      delete scope.__bookThree;
+    };
+  }, [gl, stage]);
 
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
@@ -431,7 +504,9 @@ function BookModel({
     [],
   );
 
-  const buttonFrom = (event: ThreeEvent<PointerEvent>) => buttons.byObject.get(event.object) ?? null;
+  // Once the book is turned over its sound module faces the table, so the buttons stop responding.
+  const buttonFrom = (event: ThreeEvent<PointerEvent>) =>
+    poseAt(turn.current.time).flip > 0.02 ? null : (buttons.byObject.get(event.object) ?? null);
 
   // Dev-only: where each button sits on screen, so scripts can click them.
   useEffect(() => {
@@ -466,7 +541,8 @@ function BookModel({
       if (state.time === state.to) onSettledRef.current();
     }
 
-    if (action) action.time = state.time;
+    const pose = poseAt(state.time);
+    if (action) action.time = pose.clip;
     mixer.update(delta);
 
     const now = performance.now();
@@ -477,7 +553,19 @@ function BookModel({
     }
 
     if (root.current) {
-      root.current.position.x = -centreAt(state.time, fit.centres);
+      // Turning the book over: tip it towards the reader while spinning it
+      // round. Ry(pi) * Rx(pi) equals Rz(pi), so it lands face down with the
+      // back cover reading the right way up, without ever standing on its
+      // long edge and leaving the frame.
+      const angle = Math.PI * pose.flip;
+      root.current.quaternion
+        .setFromAxisAngle(Y_AXIS, angle)
+        .multiply(TIP.setFromAxisAngle(X_AXIS, angle));
+      // Keep the book centred as the spin carries its offset round.
+      root.current.position.x = -centreAt(pose.clip, fit.centres) * Math.cos(angle);
+      // Draw it back a little mid-turn, the way a book is lifted to turn it
+      // over, so the tipped-up book stays inside the frame.
+      root.current.scale.setScalar(fit.scale * (1 - 0.22 * Math.sin(angle)));
     }
   });
 
@@ -505,6 +593,18 @@ function BookModel({
           }}
         />
       </group>
+      {pocket &&
+        photoFrame &&
+        createPortal(
+          <PhotoSlot
+            frame={photoFrame}
+            photo={photo}
+            showControls={photoControls}
+            isRevealed={isPhotoRevealed}
+            onChange={onPhotoChange}
+          />,
+          pocket,
+        )}
       <ContactShadows
         position={[0, fit.floor + 0.002, 0]}
         opacity={0.42}
@@ -518,10 +618,21 @@ function BookModel({
   );
 }
 
+/*
+ * Lighting is balanced so the page artwork, and any photo placed in the
+ * book, render at their true colours. Under ACES filmic tone mapping and
+ * brighter lights, a test photo lost half its saturation (mean colour error
+ * 128 out of 441). These values were picked by measuring that same photo on
+ * screen across a sweep of light levels, and bring the error down to about 13.
+ */
+const ENVIRONMENT_INTENSITY = 0.7;
+const KEY_LIGHT = 0.5;
+const FILL_LIGHT = 0.2;
+
 /** A small studio built from area lights, so no HDRI has to be fetched. */
 function Studio() {
   return (
-    <Environment resolution={256}>
+    <Environment resolution={256} environmentIntensity={ENVIRONMENT_INTENSITY}>
       <Lightformer form="rect" intensity={3.6} position={[0, 5, 3]} scale={[10, 5, 1]} target />
       <Lightformer form="rect" intensity={1.9} position={[-5, 2, 3]} scale={[5, 5, 1]} target />
       <Lightformer form="rect" intensity={1.4} position={[5, 1, -3]} scale={[5, 5, 1]} target />
@@ -545,10 +656,16 @@ export default function BookScene({
   stop,
   onSettled,
   onButton,
+  photo,
+  onPhotoChange,
+  photoControls,
 }: {
   stop: number;
   onSettled: () => void;
   onButton?: (id: SoundId) => void;
+  photo: string | null;
+  onPhotoChange: (photo: string | null) => boolean;
+  photoControls: boolean;
 }) {
   return (
     <Canvas
@@ -559,14 +676,14 @@ export default function BookScene({
       gl={{
         antialias: true,
         alpha: true,
-        toneMapping: THREE.ACESFilmicToneMapping,
-        toneMappingExposure: 1.02,
+        // Neutral keeps printed colours true; ACES filmic desaturates them.
+        toneMapping: THREE.NeutralToneMapping,
+        toneMappingExposure: 1,
       }}
     >
-      <ambientLight intensity={0.4} />
       <directionalLight
         castShadow
-        intensity={1.9}
+        intensity={KEY_LIGHT}
         position={[3.5, 6.5, 4]}
         shadow-mapSize={[2048, 2048]}
         shadow-bias={-0.0004}
@@ -574,7 +691,7 @@ export default function BookScene({
       >
         <orthographicCamera attach="shadow-camera" args={[-4, 4, 4, -4, 0.1, 24]} />
       </directionalLight>
-      <directionalLight intensity={0.6} position={[-4, 3, -2]} color="#d3e2ff" />
+      <directionalLight intensity={FILL_LIGHT} position={[-4, 3, -2]} color="#d3e2ff" />
 
       <OrbitControls
         makeDefault
@@ -588,7 +705,14 @@ export default function BookScene({
       />
 
       <Suspense fallback={null}>
-        <BookModel stop={stop} onSettled={onSettled} onButton={onButton} />
+        <BookModel
+          stop={stop}
+          onSettled={onSettled}
+          onButton={onButton}
+          photo={photo}
+          onPhotoChange={onPhotoChange}
+          photoControls={photoControls}
+        />
         <Studio />
       </Suspense>
     </Canvas>

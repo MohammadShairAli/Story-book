@@ -2,10 +2,26 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useProgress } from "@react-three/drei";
-import { BookOpen, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
+import {
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  PartyPopper,
+  RotateCcw,
+  Ticket,
+} from "lucide-react";
 import BookScene from "./book/BookScene";
-import { SOUNDS, playSound, type SoundId } from "./book/sounds";
-import { FIRST_STOP, LAST_STOP, SPREAD_COUNT, clampStop, labelAt } from "./book/timeline";
+import { hintAt, nextLabel, previousLabel, type Hint } from "./book/guide";
+import { clearPhoto, loadPhoto, savePhoto } from "./book/photo";
+import { SOUNDS, decalUrl, playSound, type SoundId } from "./book/sounds";
+import {
+  FIRST_STOP,
+  LAST_STOP,
+  POCKET_STOP,
+  SPREAD_COUNT,
+  clampStop,
+  labelAt,
+} from "./book/timeline";
 
 function Loader({ active }: { active: boolean }) {
   const { progress } = useProgress();
@@ -33,11 +49,46 @@ function Loader({ active }: { active: boolean }) {
   );
 }
 
+function HintIcon({ hint }: { hint: Hint }) {
+  if (hint.sound) {
+    // The same decal as the button on the book, so it is easy to find.
+    return (
+      <span
+        aria-hidden
+        className="h-9 w-9 shrink-0 rounded-full bg-cover bg-center shadow-[0_2px_6px_rgba(74,58,36,0.25)]"
+        style={{ backgroundImage: `url(${decalUrl(hint.sound)})` }}
+      />
+    );
+  }
+
+  const Icon = hint.icon === "pocket" ? Ticket : hint.icon === "end" ? PartyPopper : BookOpen;
+  return (
+    <span
+      aria-hidden
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e3efe9] text-[#2c6350]"
+    >
+      <Icon size={18} strokeWidth={2.2} />
+    </span>
+  );
+}
+
 export default function BookExperience() {
   const [stop, setStop] = useState(FIRST_STOP);
   const [isTurning, setIsTurning] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [toast, setToast] = useState<{ id: SoundId; key: number } | null>(null);
+  // The keepsake photo lives in localStorage; nothing about it is prerendered.
+  const [photo, setPhoto] = useState<string | null>(() => loadPhoto());
+
+  const changePhoto = useCallback((next: string | null) => {
+    if (next) {
+      if (!savePhoto(next)) return false;
+    } else {
+      clearPhoto();
+    }
+    setPhoto(next);
+    return true;
+  }, []);
 
   const { active, progress } = useProgress();
   useEffect(() => {
@@ -107,17 +158,25 @@ export default function BookExperience() {
   }, [goTo, turn]);
 
   const label = labelAt(stop);
+  const hint = hintAt(stop);
   const canGoBack = stop > FIRST_STOP;
   const canGoForward = stop < LAST_STOP;
 
   return (
     <main className="relative h-[100dvh] w-full overflow-hidden bg-[#f4ecdc] text-[#26201a]">
-      <BookScene stop={stop} onSettled={onSettled} onButton={onButton} />
+      <BookScene
+        stop={stop}
+        onSettled={onSettled}
+        onButton={onButton}
+        photo={photo}
+        onPhotoChange={changePhoto}
+        photoControls={stop === POCKET_STOP && !isTurning}
+      />
 
       {/* Warm vignette, so the book sits in the page rather than on top of it. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(125%_90%_at_50%_15%,transparent_40%,rgba(74,58,36,0.17)_100%)]"
+        className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(130%_95%_at_50%_20%,transparent_58%,rgba(74,58,36,0.1)_100%)]"
       />
 
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-4 p-5 sm:p-7">
@@ -131,7 +190,7 @@ export default function BookExperience() {
         </div>
 
         <div className="rounded-full border border-[#ddcdb0] bg-[#fdf8ee]/80 px-4 py-2 text-right shadow-[0_6px_20px_rgba(74,58,36,0.1)] backdrop-blur-sm">
-          <p className="text-sm font-semibold tabular-nums text-[#2c6350]">
+          <p className="whitespace-nowrap text-sm font-semibold tabular-nums text-[#2c6350]">
             {label.kind === "spread" ? (
               <>
                 {label.spread}
@@ -143,6 +202,22 @@ export default function BookExperience() {
           </p>
         </div>
       </header>
+
+      {/* What to do on this page. Shown once the book has settled. */}
+      <div
+        aria-live="polite"
+        className="pointer-events-none absolute inset-x-0 top-[5.25rem] z-20 flex justify-center px-4 lg:top-7"
+      >
+        {isReady && !isTurning && (
+          <p
+            key={stop}
+            className="flex max-w-md animate-[hint_0.45s_ease-out] items-center gap-3 rounded-2xl border border-[#ddcdb0] bg-[#fdf8ee]/92 py-2 pl-2 pr-4 text-sm font-medium leading-snug text-[#3b3225] shadow-[0_8px_26px_rgba(74,58,36,0.14)] backdrop-blur-sm sm:text-base"
+          >
+            <HintIcon hint={hint} />
+            <span>{hint.text}</span>
+          </p>
+        )}
+      </div>
 
       {/* Controls sit under the book, clear of the model itself. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-3 p-4 sm:p-6">
@@ -161,24 +236,36 @@ export default function BookExperience() {
             )}
           </div>
 
-          <div className="pointer-events-auto flex items-center gap-1.5">
-            {Array.from({ length: LAST_STOP + 1 }, (_, index) => {
-              const pip = labelAt(index);
-              return (
-                <button
-                  key={index}
-                  type="button"
-                  aria-label={pip.title}
-                  data-stop={index}
-                  aria-current={index === stop}
-                  onClick={() => goTo(index)}
-                  disabled={isTurning}
-                  className={`h-2 rounded-full transition-all duration-300 disabled:pointer-events-none ${
-                    index === stop ? "w-6 bg-[#2c6350]" : "w-2 bg-[#cbbb9d] hover:bg-[#9b8a70]"
-                  }`}
-                />
-              );
-            })}
+          <div className="pointer-events-auto flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              {Array.from({ length: LAST_STOP + 1 }, (_, index) => {
+                const pip = labelAt(index);
+                return (
+                  <button
+                    key={index}
+                    type="button"
+                    aria-label={pip.title}
+                    data-stop={index}
+                    aria-current={index === stop}
+                    onClick={() => goTo(index)}
+                    disabled={isTurning}
+                    className={`h-2 cursor-pointer rounded-full transition-all duration-300 disabled:pointer-events-none ${
+                      index === stop ? "w-6 bg-[#2c6350]" : "w-2 bg-[#cbbb9d] hover:bg-[#9b8a70]"
+                    }`}
+                  />
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => goTo(FIRST_STOP)}
+              disabled={isTurning || stop === FIRST_STOP}
+              className="flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold text-[#8a6a45] transition hover:bg-[#eadfc8] active:scale-95 disabled:pointer-events-none disabled:opacity-30"
+            >
+              <RotateCcw aria-hidden size={13} strokeWidth={2.4} />
+              Start again
+            </button>
           </div>
 
           <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[#ddcdb0] bg-[#fdf8ee]/88 p-1.5 shadow-[0_10px_34px_rgba(74,58,36,0.18)] backdrop-blur-md sm:gap-2 sm:p-2">
@@ -186,33 +273,20 @@ export default function BookExperience() {
               type="button"
               onClick={() => turn(-1)}
               disabled={isTurning || !canGoBack}
-              className="flex h-12 items-center gap-1 whitespace-nowrap rounded-full pl-2.5 pr-4 text-sm font-semibold text-[#2c6350] transition hover:bg-[#eadfc8] active:scale-95 disabled:pointer-events-none disabled:opacity-35 sm:pl-3.5 sm:pr-5 sm:text-base"
+              className="cursor-pointer flex h-12 items-center gap-1 whitespace-nowrap rounded-full pl-2.5 pr-4 text-sm font-semibold text-[#2c6350] transition hover:bg-[#eadfc8] active:scale-95 disabled:pointer-events-none disabled:opacity-35 sm:pl-3.5 sm:pr-5 sm:text-base"
             >
               <ChevronLeft aria-hidden size={20} strokeWidth={2.4} />
-              Previous page
+              {previousLabel(stop)}
             </button>
 
             <button
               type="button"
               onClick={() => turn(1)}
               disabled={isTurning || !canGoForward}
-              className="flex h-12 items-center gap-1 whitespace-nowrap rounded-full bg-[#2c6350] pl-4 pr-2.5 text-sm font-semibold text-white shadow-[0_6px_18px_rgba(44,99,80,0.3)] transition hover:bg-[#23513f] active:scale-95 disabled:pointer-events-none disabled:opacity-40 sm:pl-5 sm:pr-3.5 sm:text-base"
+              className="cursor-pointer flex h-12 items-center gap-1 whitespace-nowrap rounded-full bg-[#2c6350] pl-4 pr-2.5 text-sm font-semibold text-white shadow-[0_6px_18px_rgba(44,99,80,0.3)] transition hover:bg-[#23513f] active:scale-95 disabled:pointer-events-none disabled:opacity-40 sm:pl-5 sm:pr-3.5 sm:text-base"
             >
-              Next page
+              {nextLabel(stop)}
               <ChevronRight aria-hidden size={20} strokeWidth={2.4} />
-            </button>
-
-            <span aria-hidden className="h-7 w-px bg-[#e0d2b8]" />
-
-            <button
-              type="button"
-              aria-label="Back to the cover"
-              title="Back to the cover"
-              onClick={() => goTo(FIRST_STOP)}
-              disabled={isTurning || stop === FIRST_STOP}
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-[#8a6a45] transition hover:bg-[#eadfc8] active:scale-95 disabled:pointer-events-none disabled:opacity-25"
-            >
-              <RotateCcw aria-hidden size={19} strokeWidth={2.1} />
             </button>
           </div>
         </div>

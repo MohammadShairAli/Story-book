@@ -32,6 +32,10 @@ const TEXTURE_TO_SOUND: Record<string, SoundId> = {
   "button-rec": "rec",
 };
 
+/** The decal printed on a button's cap, as served from `public/`. */
+export const decalUrl = (id: SoundId) =>
+  `/model/textures/${Object.keys(TEXTURE_TO_SOUND).find((name) => TEXTURE_TO_SOUND[name] === id)}.webp`;
+
 export const soundForTexture = (name: string | undefined): SoundId | null =>
   (name && TEXTURE_TO_SOUND[name]) || null;
 

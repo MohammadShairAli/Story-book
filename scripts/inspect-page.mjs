@@ -17,7 +17,7 @@ const HEIGHT = Number(process.env.SHOT_HEIGHT ?? 900);
 const TURN_WAIT = Number(process.env.SHOT_WAIT ?? 2200);
 
 const stops = process.argv.slice(2).map(Number).filter(Number.isInteger);
-const wanted = stops.length ? stops : [0, 1, 2, 3, 4, 5, 6, 7];
+const wanted = stops.length ? stops : [0, 1, 2, 3, 4, 5, 6, 7, 8];
 
 const target = await (
   await fetch(`http://localhost:${DEBUG_PORT}/json/new?${PAGE_URL}`, { method: "PUT" })
@@ -123,6 +123,16 @@ let current = 0;
 for (const wantedStop of wanted) {
   if (wantedStop !== current) {
     console.log(" ", await clickPip(wantedStop));
+    // Page dots are disabled while the book turns; wait until they are back.
+    const settleBy = Date.now() + 30_000;
+    await wait(300);
+    while (Date.now() < settleBy) {
+      const settled = await evaluate(
+        `![...document.querySelectorAll("button[data-stop]")].some((pip) => pip.disabled)`,
+      ).catch(() => false);
+      if (settled) break;
+      await wait(250);
+    }
     await wait(TURN_WAIT);
     current = wantedStop;
   }
