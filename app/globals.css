@@ -52,3 +52,14 @@ canvas {
     transform: translateY(-4px) scale(1);
   }
 }
+
+@keyframes book-page-in {
+  from {
+    opacity: 0;
+    transform: rotateY(-4deg) translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: rotateY(0) translateX(0);
+  }
+}

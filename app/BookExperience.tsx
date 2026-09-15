@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useProgress } from "@react-three/drei";
 import {
   BookOpen,
   ChevronLeft,
   ChevronRight,
   PartyPopper,
+  Plus,
   RotateCcw,
   Ticket,
 } from "lucide-react";
@@ -189,17 +191,26 @@ export default function BookExperience() {
           </h1>
         </div>
 
-        <div className="rounded-full border border-[#ddcdb0] bg-[#fdf8ee]/80 px-4 py-2 text-right shadow-[0_6px_20px_rgba(74,58,36,0.1)] backdrop-blur-sm">
-          <p className="whitespace-nowrap text-sm font-semibold tabular-nums text-[#2c6350]">
-            {label.kind === "spread" ? (
-              <>
-                {label.spread}
-                <span className="font-medium text-[#9b8a70]"> / {SPREAD_COUNT}</span>
-              </>
-            ) : (
-              label.title
-            )}
-          </p>
+        <div className="pointer-events-auto flex items-center gap-2">
+          <Link
+            href="/create"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[#2c6350] px-3 py-2 text-sm font-semibold text-white shadow-[0_6px_18px_rgba(44,99,80,0.24)] transition hover:bg-[#23513f]"
+          >
+            <Plus aria-hidden size={16} strokeWidth={2.5} />
+            Create book
+          </Link>
+          <div className="rounded-full border border-[#ddcdb0] bg-[#fdf8ee]/80 px-4 py-2 text-right shadow-[0_6px_20px_rgba(74,58,36,0.1)] backdrop-blur-sm">
+            <p className="whitespace-nowrap text-sm font-semibold tabular-nums text-[#2c6350]">
+              {label.kind === "spread" ? (
+                <>
+                  {label.spread}
+                  <span className="font-medium text-[#9b8a70]"> / {SPREAD_COUNT}</span>
+                </>
+              ) : (
+                label.title
+              )}
+            </p>
+          </div>
         </div>
       </header>
 
