@@ -53,7 +53,16 @@ export const FLIP_THROUGH_SECONDS = 0.75;
  * across several pages visibly folds each one in turn instead of blurring past.
  */
 export function turnRate(fromTime: number, toStop: number) {
-  const pages = Math.abs(STOPS[clampStop(toStop)] - fromTime) / AVERAGE_TURN;
+  return turnRateTo(fromTime, STOPS[clampStop(toStop)]);
+}
+
+/**
+ * As `turnRate`, but given the destination in timeline seconds. A book with
+ * its own stop list (a custom book, which has no keepsake pocket) indexes
+ * stops differently, so it works in times rather than stop numbers.
+ */
+export function turnRateTo(fromTime: number, toTime: number) {
+  const pages = Math.abs(toTime - fromTime) / AVERAGE_TURN;
   return AVERAGE_TURN / (pages > 1.5 ? FLIP_THROUGH_SECONDS : TURN_SECONDS);
 }
 

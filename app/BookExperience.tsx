@@ -7,8 +7,8 @@ import {
   BookOpen,
   ChevronLeft,
   ChevronRight,
+  LayoutDashboard,
   PartyPopper,
-  Plus,
   RotateCcw,
   Ticket,
 } from "lucide-react";
@@ -193,11 +193,11 @@ export default function BookExperience() {
 
         <div className="pointer-events-auto flex items-center gap-2">
           <Link
-            href="/create"
-            className="inline-flex items-center gap-1.5 rounded-full bg-[#2c6350] px-3 py-2 text-sm font-semibold text-white shadow-[0_6px_18px_rgba(44,99,80,0.24)] transition hover:bg-[#23513f]"
+            href="/"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[#ddcdb0] bg-[#fdf8ee]/80 px-3 py-2 text-sm font-semibold text-[#426b55] shadow-[0_6px_18px_rgba(74,58,36,0.1)] backdrop-blur-sm transition hover:bg-white"
           >
-            <Plus aria-hidden size={16} strokeWidth={2.5} />
-            Create book
+            <LayoutDashboard aria-hidden size={16} strokeWidth={2.5} />
+            Dashboard
           </Link>
           <div className="rounded-full border border-[#ddcdb0] bg-[#fdf8ee]/80 px-4 py-2 text-right shadow-[0_6px_20px_rgba(74,58,36,0.1)] backdrop-blur-sm">
             <p className="whitespace-nowrap text-sm font-semibold tabular-nums text-[#2c6350]">

@@ -8,6 +8,8 @@
 
 export type SoundId = "whistle" | "crowd" | "aaah" | "ole" | "stadium" | "rec";
 
+export const SOUND_BUTTON_ORDER: readonly SoundId[] = ["crowd", "whistle", "stadium", "aaah", "ole", "rec"];
+
 /**
  * Every button's decal is also printed as a small round badge in the top
  * corner of one spread, and pressing the button flips the book to it.

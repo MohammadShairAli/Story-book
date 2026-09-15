@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import BookReader from "./BookReader";
+import ThreeBookReader from "./ThreeBookReader";
 import { getBook } from "@/lib/books";
 
 type BookPageProps = {
@@ -21,5 +21,5 @@ export default async function SharedBookPage({ params }: BookPageProps) {
   const { slug } = await params;
   const book = await getBook(slug);
   if (!book) notFound();
-  return <BookReader book={book} />;
+  return <ThreeBookReader book={book} />;
 }

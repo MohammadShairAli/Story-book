@@ -9,10 +9,11 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, createPortal, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Environment, Lightformer, OrbitControls, useGLTF } from "@react-three/drei";
+import { SkeletonUtils } from "three-stdlib";
 import * as THREE from "three";
 import PhotoSlot, { PHOTO_PAGE_TEXTURE, measurePhotoFrame } from "./PhotoSlot";
 import { soundForTexture, type SoundId } from "./sounds";
-import { CLIP_NAME, CLIP_STOPS, MODEL_PATH, STOPS, clampStop, poseAt, turnRate } from "./timeline";
+import { CLIP_NAME, CLIP_STOPS, MODEL_PATH, STOPS, poseAt, turnRateTo } from "./timeline";
 
 /** The book is rescaled so its widest pose measures this across. */
 const BOOK_WIDTH = 2.6;
@@ -73,6 +74,22 @@ type SoundButton = {
   pressedAt: number;
   press: number;
 };
+
+export type BookSceneTextures = {
+  coverUrl?: string;
+  pageUrls?: readonly string[];
+  buttonIcons?: Partial<Record<SoundId, string>>;
+};
+
+/**
+ * Timeline seconds for each stop the reader can land on, indexed by stop.
+ *
+ * The demo book uses the model's own stops, which include the keepsake pocket
+ * before the final turn-over. A custom book has no pocket, so it passes its
+ * own list -- cover, one entry per printed spread, then the turn-over -- and
+ * the pocket is skipped rather than showing as a blank stop at the end.
+ */
+export type StopTimes = readonly number[];
 
 /**
  * Grows `box` to cover every vertex of `subject` in its current pose.
@@ -145,6 +162,8 @@ function BookModel({
   photo,
   onPhotoChange,
   photoControls,
+  textures,
+  stopTimes,
 }: {
   stop: number;
   onSettled: () => void;
@@ -152,9 +171,23 @@ function BookModel({
   photo: string | null;
   onPhotoChange: (photo: string | null) => boolean;
   photoControls: boolean;
+  textures?: BookSceneTextures;
+  stopTimes?: StopTimes;
 }) {
   const root = useRef<THREE.Group>(null);
-  const { scene, animations } = useGLTF(MODEL_PATH);
+  const gltf = useGLTF(MODEL_PATH);
+  const animations = gltf.animations;
+  const scene = useMemo(() => {
+    const clone = SkeletonUtils.clone(gltf.scene) as THREE.Group;
+    clone.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.material = Array.isArray(mesh.material)
+        ? mesh.material.map((material) => material.clone())
+        : mesh.material.clone();
+    });
+    return clone;
+  }, [gltf.scene]);
   const gl = useThree((state) => state.gl);
   const stage = useThree((state) => state.scene);
   const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
@@ -268,6 +301,69 @@ function BookModel({
       }
     });
   }, [buttons, gl, scene]);
+
+  useEffect(() => {
+    if (!textures) return;
+
+    const materialUrls = new Map<string, string>();
+    if (textures.coverUrl) materialUrls.set("Cover", textures.coverUrl);
+    for (const [index, url] of (textures.pageUrls ?? []).entries()) {
+      if (url) materialUrls.set(String(index + 1), url);
+    }
+
+    const buttonIconUrls = textures.buttonIcons ?? {};
+    if (materialUrls.size === 0 && Object.keys(buttonIconUrls).length === 0) return;
+
+    let cancelled = false;
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin("anonymous");
+    const loaded: THREE.Texture[] = [];
+    const anisotropy = gl.capabilities.getMaxAnisotropy();
+
+    const applyTexture = (material: THREE.MeshStandardMaterial, url: string) => {
+      loader.load(url, (texture) => {
+        if (cancelled) {
+          texture.dispose();
+          return;
+        }
+
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.flipY = false;
+        texture.anisotropy = anisotropy;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.needsUpdate = true;
+
+        loaded.push(texture);
+        material.map = texture;
+        material.color.set("#ffffff");
+        material.needsUpdate = true;
+      });
+    };
+
+    scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        const standard = material as THREE.MeshStandardMaterial;
+        if (!standard.isMeshStandardMaterial) continue;
+        const url = materialUrls.get(standard.name);
+        if (url) applyTexture(standard, url);
+      }
+    });
+
+    for (const button of buttons.list) {
+      const url = buttonIconUrls[button.id];
+      if (!url) continue;
+      for (const cap of button.caps) applyTexture(cap, url);
+    }
+
+    return () => {
+      cancelled = true;
+      for (const texture of loaded) texture.dispose();
+    };
+  }, [buttons, gl, scene, textures]);
 
   const action = useMemo(() => {
     const clip = animations.find((candidate) => candidate.name === CLIP_NAME) ?? animations[0];
@@ -469,14 +565,18 @@ function BookModel({
   }, []);
 
   useEffect(() => {
-    const target = STOPS[clampStop(stop)];
+    const times = stopTimes ?? STOPS;
+    const index = Math.min(Math.max(stop, 0), times.length - 1);
+    const target = times[index];
     const state = turn.current;
     state.to = target;
-    state.rate = turnRate(state.time, stop);
+    // `turnRate` measures the trip in authored page-turns, so it works off the
+    // timeline positions rather than the stop index either book counts in.
+    state.rate = turnRateTo(state.time, target);
     // A turn reversed before its first frame has nowhere to travel, so the
     // frame loop would never report it finished.
     if (state.time === target) onSettledRef.current();
-  }, [stop]);
+  }, [stop, stopTimes]);
 
   /* --------------------------------------------------------------- *
    * Button hover + press.
@@ -659,13 +759,17 @@ export default function BookScene({
   photo,
   onPhotoChange,
   photoControls,
+  textures,
+  stopTimes,
 }: {
   stop: number;
   onSettled: () => void;
   onButton?: (id: SoundId) => void;
-  photo: string | null;
-  onPhotoChange: (photo: string | null) => boolean;
-  photoControls: boolean;
+  photo?: string | null;
+  onPhotoChange?: (photo: string | null) => boolean;
+  photoControls?: boolean;
+  textures?: BookSceneTextures;
+  stopTimes?: StopTimes;
 }) {
   return (
     <Canvas
@@ -709,9 +813,11 @@ export default function BookScene({
           stop={stop}
           onSettled={onSettled}
           onButton={onButton}
-          photo={photo}
-          onPhotoChange={onPhotoChange}
-          photoControls={photoControls}
+          photo={photo ?? null}
+          onPhotoChange={onPhotoChange ?? (() => false)}
+          photoControls={photoControls ?? false}
+          textures={textures}
+          stopTimes={stopTimes}
         />
         <Studio />
       </Suspense>
