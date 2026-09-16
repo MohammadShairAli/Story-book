@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { BookOpen, Copy, ExternalLink, LoaderCircle, LockKeyhole, Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { BookOpen, Copy, ExternalLink, LoaderCircle, LockKeyhole, Plus, Trash2, TriangleAlert } from "lucide-react";
 
 export type DashboardBook = {
   id: string;
@@ -50,9 +50,25 @@ export default function BookDashboard({ books, demoUrl, storageError }: BookDash
     }
   };
 
-  const deleteBook = async (book: DashboardBook) => {
-    const confirmed = window.confirm(`Delete "${book.title}" from the dashboard and Supabase bucket?`);
-    if (!confirmed) return;
+  /** The book awaiting confirmation, or null when the dialog is closed. */
+  const [pendingDelete, setPendingDelete] = useState<DashboardBook | null>(null);
+  const cancelButton = useRef<HTMLButtonElement>(null);
+
+  // Move focus into the dialog when it opens, and close it on Escape.
+  useEffect(() => {
+    if (!pendingDelete) return;
+    cancelButton.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPendingDelete(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pendingDelete]);
+
+  const confirmDelete = async () => {
+    const book = pendingDelete;
+    if (!book) return;
+    setPendingDelete(null);
 
     setDeletingId(book.id);
     setNotice(null);
@@ -153,7 +169,7 @@ export default function BookDashboard({ books, demoUrl, storageError }: BookDash
                   </Link>
                   <button
                     type="button"
-                    onClick={() => deleteBook(book)}
+                    onClick={() => setPendingDelete(book)}
                     disabled={deletingId === book.id}
                     className="flex h-9 w-9 items-center justify-center rounded-md text-[#a54f3f] transition hover:bg-[#f7e7dc] disabled:cursor-wait disabled:opacity-60"
                     aria-label={`Delete ${book.title}`}
@@ -169,6 +185,59 @@ export default function BookDashboard({ books, demoUrl, storageError }: BookDash
           )}
         </section>
       </div>
+
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-[#2d2117]/45 p-4 backdrop-blur-[2px] sm:items-center"
+          // A click that starts and ends on the backdrop dismisses; one that
+          // began inside the card (a drag off a button) must not.
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPendingDelete(null);
+          }}
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-title"
+            aria-describedby="delete-body"
+            className="w-full max-w-md rounded-xl border border-[#d8c6a8] bg-[#fffaf0] p-5 shadow-[0_24px_60px_rgba(45,33,23,0.32)]"
+          >
+            <div className="flex items-start gap-3">
+              <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#f7e7dc] text-[#a54f3f]">
+                <TriangleAlert size={20} />
+              </span>
+              <div className="min-w-0">
+                <h2 id="delete-title" className="text-base font-semibold text-[#2d2117]">
+                  Delete this book?
+                </h2>
+                <p id="delete-body" className="mt-1.5 text-sm leading-6 text-[#705f4c]">
+                  &ldquo;<span className="font-semibold text-[#3d3023]">{pendingDelete.title}</span>&rdquo; and its
+                  images will be removed from the dashboard and the storage bucket. Anyone with the link will no longer
+                  be able to open it. This cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                ref={cancelButton}
+                type="button"
+                onClick={() => setPendingDelete(null)}
+                className="rounded-lg border border-[#d9c7aa] bg-white px-4 py-2.5 text-sm font-semibold text-[#5c4b38] transition hover:bg-[#f7efdf]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDelete()}
+                className="rounded-lg bg-[#a54f3f] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_6px_16px_rgba(165,79,63,0.28)] transition hover:bg-[#8c4133]"
+              >
+                Delete book
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

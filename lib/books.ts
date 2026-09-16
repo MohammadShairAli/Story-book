@@ -16,11 +16,10 @@ export type SharedBook = {
   id: string;
   title: string;
   createdAt: string;
-  frontCoverUrl: string;
-  backCoverUrl: string;
+  /** The single wraparound cover image: back, spine and front on one sheet. */
+  coverUrl: string;
   dimensions?: {
-    frontCover: BookImageSpec;
-    backCover: BookImageSpec;
+    cover: BookImageSpec;
     storyPage: BookImageSpec;
   };
   pages: BookPage[];
@@ -259,31 +258,29 @@ async function getBookWithConfig(config: SupabaseConfig, id: string): Promise<Sh
   if (response.status === 404) return null;
   if (!response.ok) throw new Error("Supabase could not load this book.");
 
-  const book: unknown = await response.json();
+  const raw: unknown = await response.json();
+  const book = raw && typeof raw === "object" ? migrateBook(raw as Record<string, unknown>) : raw;
   return isSharedBook(book) ? book : null;
 }
 
 export async function createBook({
   title,
-  frontCover,
-  backCover,
+  cover,
   pages,
 }: {
   title: string;
-  frontCover: File;
-  backCover: File;
+  cover: File;
   pages: CreateBookPageInput[];
 }): Promise<SharedBook> {
   const trimmedTitle = title.trim().replace(/\s+/g, " ");
   if (!trimmedTitle) throw new Error("Give your book a title.");
   if (trimmedTitle.length > 100) throw new Error("Keep the title under 100 characters.");
-  if (!frontCover || !backCover) throw new Error("Add both a front and back cover.");
+  if (!cover) throw new Error("Add a cover image.");
   if (pages.length !== STORY_PAGE_COUNT) {
     throw new Error(`A book needs exactly ${STORY_PAGE_COUNT} story pages, plus a front and back cover.`);
   }
 
-  validateImage(frontCover, "Front cover");
-  validateImage(backCover, "Back cover");
+  validateImage(cover, "Cover");
   pages.forEach((page, index) => {
     validateImage(page.image, `Page ${index + 1}`);
     if (page.icon) validateImage(page.icon, `Page ${index + 1} icon`);
@@ -299,10 +296,8 @@ export async function createBook({
     return publicUrl(config, path);
   };
 
-  const frontCoverPath = `${basePath}/front.${imageExtension(frontCover)}`;
-  const backCoverPath = `${basePath}/back.${imageExtension(backCover)}`;
-  const frontCoverUrl = await uploadImage(frontCover, frontCoverPath);
-  const backCoverUrl = await uploadImage(backCover, backCoverPath);
+  const coverPath = `${basePath}/cover.${imageExtension(cover)}`;
+  const coverUrl = await uploadImage(cover, coverPath);
 
   const bookPages = await Promise.all(
     pages.map(async (page, index) => {
@@ -336,8 +331,7 @@ export async function createBook({
     id,
     title: trimmedTitle,
     createdAt: new Date().toISOString(),
-    frontCoverUrl,
-    backCoverUrl,
+    coverUrl,
     dimensions: BOOK_IMAGE_SPECS,
     pages: bookPages,
   };
@@ -382,6 +376,29 @@ async function recordBook(config: SupabaseConfig, book: SharedBook) {
   }
 }
 
+/**
+ * Books written before the cover became a single wraparound image, which
+ * carried a separate front and back cover instead of one `coverUrl`.
+ */
+type LegacyCoverBook = { frontCoverUrl?: unknown; backCoverUrl?: unknown };
+
+/**
+ * Brings an older manifest up to the current shape.
+ *
+ * The front cover is kept as the book's cover -- it is the face a reader sees
+ * first, and the two images cannot be fused back into one sheet server-side.
+ * Migrating on read rather than rejecting matters: `deleteBook` loads the
+ * manifest to find what to remove, so a book that fails to parse can neither
+ * be opened nor deleted.
+ */
+function migrateBook(value: Record<string, unknown>): Record<string, unknown> {
+  if (typeof value.coverUrl === "string") return value;
+
+  const legacy = value as LegacyCoverBook;
+  const cover = typeof legacy.frontCoverUrl === "string" ? legacy.frontCoverUrl : legacy.backCoverUrl;
+  return typeof cover === "string" ? { ...value, coverUrl: cover } : value;
+}
+
 function isSharedBook(value: unknown): value is SharedBook {
   if (!value || typeof value !== "object") return false;
   const book = value as Partial<SharedBook>;
@@ -390,8 +407,7 @@ function isSharedBook(value: unknown): value is SharedBook {
     typeof book.id === "string" &&
     typeof book.title === "string" &&
     typeof book.createdAt === "string" &&
-    typeof book.frontCoverUrl === "string" &&
-    typeof book.backCoverUrl === "string" &&
+    typeof book.coverUrl === "string" &&
     Array.isArray(book.pages) &&
     book.pages.every(
       (page) =>
@@ -544,18 +560,27 @@ export async function deleteBook(id: string) {
   if (!BOOK_ID_PATTERN.test(id)) throw new Error("Invalid book id.");
 
   const config = getConfig();
-  const book = await getBookWithConfig(config, id);
-  if (!book) throw new Error("Book not found.");
-
   const basePath = `books/${id}`;
-  const paths = [
-    `${basePath}/book.json`,
-    book.frontCoverUrl,
-    book.backCoverUrl,
-    ...book.pages.map((page) => page.imageUrl),
-    ...book.pages.map((page) => page.iconUrl).filter((url): url is string => !!url),
-    ...book.pages.map((page) => page.audioUrl).filter((url): url is string => !!url),
-  ]
+
+  /*
+   * A missing or unreadable manifest is not a reason to refuse. Deleting is
+   * driven by what is actually in storage; the manifest only adds the exact
+   * object names, so a half-written or older book can still be cleared out
+   * instead of being stuck on the dashboard forever.
+   */
+  const book = await getBookWithConfig(config, id).catch(() => null);
+
+  const paths = (
+    book
+      ? [
+          `${basePath}/book.json`,
+          book.coverUrl,
+          ...book.pages.map((page) => page.imageUrl),
+          ...book.pages.map((page) => page.iconUrl).filter((url): url is string => !!url),
+          ...book.pages.map((page) => page.audioUrl).filter((url): url is string => !!url),
+        ]
+      : [`${basePath}/book.json`]
+  )
     .map((pathOrUrl) => (pathOrUrl.startsWith("http") ? privateObjectPathFromPublicUrl(config, pathOrUrl) : pathOrUrl))
     .filter((path): path is string => !!path);
 

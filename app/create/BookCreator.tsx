@@ -208,8 +208,7 @@ function CoverPicker({
 
 export default function BookCreator() {
   const [title, setTitle] = useState("");
-  const [frontCover, setFrontCover] = useState<SelectedImage | null>(null);
-  const [backCover, setBackCover] = useState<SelectedImage | null>(null);
+  const [cover, setCover] = useState<SelectedImage | null>(null);
   const [pages, setPages] = useState<SelectedPage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -238,7 +237,7 @@ export default function BookCreator() {
     objectUrls.current.delete(image.previewUrl);
   };
 
-  const replaceCover = async (cover: "front" | "back", file: File | null) => {
+  const replaceCover = async (file: File | null) => {
     if (!file) return;
     if (!isAllowedFile(file, "image")) {
       setError(`"${file.name}" is not an image. Use ${IMAGE_LABEL}.`);
@@ -247,17 +246,11 @@ export default function BookCreator() {
     setProcessing(true);
     setError(null);
     try {
-      const spec = cover === "front" ? BOOK_IMAGE_SPECS.frontCover : BOOK_IMAGE_SPECS.backCover;
-      const image = selectImage(await normalizeImageFile(file, spec));
+      const image = selectImage(await normalizeImageFile(file, BOOK_IMAGE_SPECS.cover));
       if (!image) return;
       setShareUrl(null);
-      if (cover === "front") {
-        discard(frontCover);
-        setFrontCover(image);
-      } else {
-        discard(backCover);
-        setBackCover(image);
-      }
+      discard(cover);
+      setCover(image);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : `Could not read "${file.name}".`);
     } finally {
@@ -329,7 +322,7 @@ export default function BookCreator() {
     setProcessing(true);
     setError(null);
     try {
-      const icon = selectImage(await normalizeImageFile(file, BOOK_IMAGE_SPECS.frontCover));
+      const icon = selectImage(await normalizeImageFile(file, BOOK_IMAGE_SPECS.cover));
       if (!icon) return;
       discard(page.icon);
       updatePage(page.id, { icon, iconName: page.iconName || fileStem(file) });
@@ -374,8 +367,8 @@ export default function BookCreator() {
     event.preventDefault();
     setError(null);
     setCopied(false);
-    if (!frontCover || !backCover) {
-      setError("Add both a front cover and a back cover.");
+    if (!cover) {
+      setError("Add a cover image.");
       return;
     }
     if (pages.length !== STORY_PAGE_COUNT) {
@@ -391,8 +384,7 @@ export default function BookCreator() {
     try {
       const form = new FormData();
       form.set("title", title);
-      form.set("frontCover", frontCover.file);
-      form.set("backCover", backCover.file);
+      form.set("cover", cover.file);
       pages.forEach((page, index) => {
         form.append("pages", page.image.file);
         form.set(`pageTitle-${index}`, page.title);
@@ -418,7 +410,7 @@ export default function BookCreator() {
   };
 
   /** Every slot filled: both covers and exactly the required story pages. */
-  const isComplete = !!frontCover && !!backCover && pages.length === STORY_PAGE_COUNT;
+  const isComplete = !!cover && pages.length === STORY_PAGE_COUNT;
 
   const copyShareUrl = async () => {
     if (!shareUrl) return;
@@ -444,8 +436,7 @@ export default function BookCreator() {
             <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[#2d2117] sm:text-3xl">Create a 3D book</h1>
           </div>
           <p className="max-w-xl text-sm leading-6 text-[#705f4c]">
-            Front {imageSpecLabel(BOOK_IMAGE_SPECS.frontCover)}, back {imageSpecLabel(BOOK_IMAGE_SPECS.backCover)}, story pages{" "}
-            {imageSpecLabel(BOOK_IMAGE_SPECS.storyPage)}.
+            Cover {imageSpecLabel(BOOK_IMAGE_SPECS.cover)}, story pages {imageSpecLabel(BOOK_IMAGE_SPECS.storyPage)}.
           </p>
         </div>
 
@@ -470,24 +461,13 @@ export default function BookCreator() {
             </div>
 
             <CoverPicker
-              label="Front cover"
-              spec={BOOK_IMAGE_SPECS.frontCover}
-              image={frontCover}
-              onPick={(file) => void replaceCover("front", file)}
+              label="Cover"
+              spec={BOOK_IMAGE_SPECS.cover}
+              image={cover}
+              onPick={(file) => void replaceCover(file)}
               onRemove={() => {
-                discard(frontCover);
-                setFrontCover(null);
-                setShareUrl(null);
-              }}
-            />
-            <CoverPicker
-              label="Back cover"
-              spec={BOOK_IMAGE_SPECS.backCover}
-              image={backCover}
-              onPick={(file) => void replaceCover("back", file)}
-              onRemove={() => {
-                discard(backCover);
-                setBackCover(null);
+                discard(cover);
+                setCover(null);
                 setShareUrl(null);
               }}
             />
@@ -639,7 +619,7 @@ export default function BookCreator() {
 
             {!isComplete && !saving && !processing && (
               <p className="text-xs font-medium text-[#8c745b]">
-                Needs a front cover, a back cover, and exactly {STORY_PAGE_COUNT} story pages
+                Needs a cover and exactly {STORY_PAGE_COUNT} story pages
                 {" "}({pages.length} of {STORY_PAGE_COUNT} added).
               </p>
             )}

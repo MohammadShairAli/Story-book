@@ -11,7 +11,7 @@ import { Canvas, createPortal, useFrame, useThree, type ThreeEvent } from "@reac
 import { ContactShadows, Environment, Lightformer, OrbitControls, useGLTF } from "@react-three/drei";
 import { SkeletonUtils } from "three-stdlib";
 import * as THREE from "three";
-import PhotoSlot, { PHOTO_PAGE_TEXTURE, measurePhotoFrame } from "./PhotoSlot";
+import PhotoSlot, { PHOTO_PAGE_MATERIAL, PHOTO_PAGE_TEXTURE, measurePhotoFrame } from "./PhotoSlot";
 import { soundForTexture, type SoundId } from "./sounds";
 import { CLIP_NAME, CLIP_STOPS, MODEL_PATH, STOPS, poseAt, turnRateTo } from "./timeline";
 
@@ -501,15 +501,24 @@ function BookModel({
   const turn = useRef({ time: STOPS[0], to: STOPS[0], rate: 1 });
 
   /** The leaf carrying the photo pocket; the photo is parented to it. */
+  /*
+   * The leaf carrying the pocket, found by the material it is printed with.
+   *
+   * Matching on the material's *name* rather than its texture's name matters:
+   * a custom book replaces that texture with the reader's own page artwork, so
+   * a lookup keyed on the shipped texture name would depend on running before
+   * the upload finishes loading.
+   */
   const pocket = useMemo(() => {
     let found: THREE.Object3D | null = null;
     scene.traverse((object) => {
       const mesh = object as THREE.Mesh;
       if (found || !mesh.isMesh) return;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      const onPage = materials.some(
-        (material) => (material as THREE.MeshStandardMaterial).map?.name === PHOTO_PAGE_TEXTURE,
-      );
+      const onPage = materials.some((material) => {
+        const standard = material as THREE.MeshStandardMaterial;
+        return standard.name === PHOTO_PAGE_MATERIAL || standard.map?.name === PHOTO_PAGE_TEXTURE;
+      });
       if (onPage) found = mesh;
     });
     return found as THREE.Object3D | null;

@@ -10,6 +10,12 @@ import { preparePhoto } from "./photo";
 /** The leaf the photo pocket is printed on, identified by its artwork. */
 export const PHOTO_PAGE_TEXTURE = "page-6";
 
+/**
+ * The same leaf's material name. A custom book swaps the artwork above for the
+ * reader's own upload, but material names come from the model and never change.
+ */
+export const PHOTO_PAGE_MATERIAL = "6";
+
 /** The bone that swings the white card open to uncover the pocket. */
 export const PHOTO_CARD_BONE = "lid";
 

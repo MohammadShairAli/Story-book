@@ -6,8 +6,7 @@ export async function POST(request: Request) {
   try {
     const form = await request.formData();
     const title = form.get("title");
-    const frontCover = form.get("frontCover");
-    const backCover = form.get("backCover");
+    const cover = form.get("cover");
     const pages = form
       .getAll("pages")
       .filter((value): value is File => value instanceof File && value.size > 0);
@@ -15,8 +14,8 @@ export async function POST(request: Request) {
     if (typeof title !== "string") {
       return Response.json({ error: "A title is required." }, { status: 400 });
     }
-    if (!(frontCover instanceof File) || !(backCover instanceof File)) {
-      return Response.json({ error: "Add both a front and back cover." }, { status: 400 });
+    if (!(cover instanceof File)) {
+      return Response.json({ error: "Add a cover image." }, { status: 400 });
     }
 
     const pageInputs: CreateBookPageInput[] = pages.map((page, index) => {
@@ -36,7 +35,7 @@ export async function POST(request: Request) {
       };
     });
 
-    const book = await createBook({ title, frontCover, backCover, pages: pageInputs });
+    const book = await createBook({ title, cover, pages: pageInputs });
     return Response.json({ id: book.id, url: `/books/${book.id}` }, { status: 201 });
   } catch (error) {
     if (error instanceof StorageConfigurationError) {

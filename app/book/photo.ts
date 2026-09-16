@@ -7,31 +7,40 @@
 
 const STORAGE_KEY = "story-book:keepsake-photo";
 
+/**
+ * Where a given book's photo is kept. The demo book uses the bare key it has
+ * always used, so a photo placed before this existed is still there; a custom
+ * book is scoped by its id, so two books do not share one picture.
+ */
+function storageKey(bookId?: string) {
+  return bookId ? `${STORAGE_KEY}:${bookId}` : STORAGE_KEY;
+}
+
 /** Longest side of the stored image, which keeps it far inside storage quotas. */
 const MAX_SIDE = 1024;
 
-export function loadPhoto(): string | null {
+export function loadPhoto(bookId?: string): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(STORAGE_KEY);
+    return window.localStorage.getItem(storageKey(bookId));
   } catch {
     return null;
   }
 }
 
 /** Returns false when the browser refuses to store it (quota, private mode). */
-export function savePhoto(dataUrl: string): boolean {
+export function savePhoto(dataUrl: string, bookId?: string): boolean {
   try {
-    window.localStorage.setItem(STORAGE_KEY, dataUrl);
+    window.localStorage.setItem(storageKey(bookId), dataUrl);
     return true;
   } catch {
     return false;
   }
 }
 
-export function clearPhoto() {
+export function clearPhoto(bookId?: string) {
   try {
-    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(storageKey(bookId));
   } catch {
     // Storage is unavailable, so there is nothing to remove.
   }

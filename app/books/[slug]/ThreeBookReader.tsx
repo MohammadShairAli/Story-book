@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Copy, LayoutDashboard, RotateCcw, Share2, Volume2 } from "lucide-react";
 import BookScene, { type BookSceneTextures } from "@/app/book/BookScene";
-import { buildWraparoundCover } from "@/app/book/coverTexture";
+import { clearPhoto, loadPhoto, savePhoto } from "@/app/book/photo";
 import { CLIP_STOPS, STOPS } from "@/app/book/timeline";
 import { SOUND_BUTTON_ORDER, type SoundId } from "@/app/book/sounds";
 import { STORY_PAGE_COUNT } from "@/lib/bookLimits";
@@ -47,20 +47,33 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
 
   /*
    * Stops mirror the demo book: 0 is the shut front cover, 1..n are the
-   * printed spreads, and one stop past the last spread turns the whole book
-   * over to show its back cover.
+   * printed spreads, and the last stop turns the book over onto its back
+   * cover.
+   *
+   * The final spread is the keepsake page: it shows its own uploaded artwork
+   * like every other page, and additionally carries the pocket the reader
+   * slips a photo into, so the book stops there rather than running past it.
    */
+  const pocketStop = slots.length;
   const backStop = slots.length + 1;
   const maxStop = backStop;
 
   /**
-   * Where each stop sits on the model's timeline. `CLIP_STOPS[i]` is the pose
-   * with spread `i` open, so a book of n spreads uses the first n + 1 of them
-   * and then the turn-over -- the last entry of `STOPS` -- which skips the
-   * demo's keepsake-pocket stop that a custom book has no page for.
+   * Where each stop sits on the model's timeline.
+   *
+   * `CLIP_STOPS[i]` is the pose with spread `i` open, except for the very last
+   * entry, which is the keepsake page with its white card swung open off the
+   * pocket. The final story page is that keepsake page, so it takes that last
+   * clip time rather than `CLIP_STOPS[n]` -- landing on `CLIP_STOPS[6]` would
+   * show the page with its pocket still covered. The last entry of `STOPS` is
+   * the turn-over onto the back cover.
    */
   const stopTimes = useMemo(
-    () => [...CLIP_STOPS.slice(0, slots.length + 1), STOPS[STOPS.length - 1]],
+    () => [
+      ...CLIP_STOPS.slice(0, slots.length),
+      CLIP_STOPS[CLIP_STOPS.length - 1],
+      STOPS[STOPS.length - 1],
+    ],
     [slots.length],
   );
   const [stop, setStop] = useState(0);
@@ -69,23 +82,21 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
   const [copied, setCopied] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  /*
-   * The front and back covers share one wraparound texture on the model, so
-   * they are composited into a single image before being handed to the scene.
-   * Until that finishes, the cover is left as the model shipped it rather
-   * than flashing a stretched front cover across both faces.
-   */
-  const [wraparoundCover, setWraparoundCover] = useState<string | null>(null);
+  // The keepsake photo is kept in this browser, scoped to this book's id.
+  const [photo, setPhoto] = useState<string | null>(() => loadPhoto(book.id));
 
-  useEffect(() => {
-    let cancelled = false;
-    void buildWraparoundCover(book.frontCoverUrl, book.backCoverUrl).then((url) => {
-      if (!cancelled) setWraparoundCover(url);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [book.backCoverUrl, book.frontCoverUrl]);
+  const changePhoto = useCallback(
+    (next: string | null) => {
+      if (next) {
+        if (!savePhoto(next, book.id)) return false;
+      } else {
+        clearPhoto(book.id);
+      }
+      setPhoto(next);
+      return true;
+    },
+    [book.id],
+  );
 
   const textures = useMemo<BookSceneTextures>(() => {
     const buttonIcons: Partial<Record<SoundId, string>> = {};
@@ -95,12 +106,13 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
     });
 
     return {
-      // `pageUrls[i]` paints material "i+1", which is spread i+1 of the model.
-      coverUrl: wraparoundCover ?? undefined,
+      // The cover is one wraparound image, applied to the `Cover` material as
+      // uploaded. `pageUrls[i]` paints material "i+1", spread i+1 of the model.
+      coverUrl: book.coverUrl,
       pageUrls: slots.map((slot) => slot.imageUrl),
       buttonIcons,
     };
-  }, [slots, wraparoundCover]);
+  }, [book.coverUrl, slots]);
 
   const buttonStops = useMemo(() => {
     const next = new Map<SoundId, number>();
@@ -115,6 +127,12 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
    * has no keepsake pocket, so the turn-over is the step after the last
    * spread rather than after the pocket.
    */
+  /** The story page shown at a stop, or null on the two covers. */
+  const slotAt = useCallback(
+    (index: number) => (index > 0 && index <= slots.length ? (slots[index - 1] ?? null) : null),
+    [slots],
+  );
+
   const stopTitle = useCallback(
     (index: number) => {
       if (index === 0) return "Front cover";
@@ -126,7 +144,8 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
 
   const nextLabel = (index: number) => {
     if (index === 0) return "Open the book";
-    if (index === backStop - 1) return "Turn over";
+    if (index === pocketStop - 1) return "Open the pocket";
+    if (index === pocketStop) return "Turn over";
     return "Next page";
   };
 
@@ -136,7 +155,7 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
     return "Previous page";
   };
 
-  const current = stop === 0 || stop === backStop ? null : (slots[stop - 1] ?? null);
+  const current = slotAt(stop);
   const currentTitle = stopTitle(stop);
 
   const goTo = useCallback(
@@ -173,7 +192,7 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
   useEffect(() => {
     if (isTurning || spokenStop.current === stop) return;
     spokenStop.current = stop;
-    const slot = stop === 0 || stop === backStop ? null : (slots[stop - 1] ?? null);
+    const slot = slotAt(stop);
     if (!slot?.audioUrl) return;
 
     // Started from a timer rather than straight from the effect body: playing
@@ -181,7 +200,7 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
     // in the same commit that settled the page turn.
     const timer = window.setTimeout(() => playSlotAudio(slot), 0);
     return () => window.clearTimeout(timer);
-  }, [backStop, isTurning, playSlotAudio, slots, stop]);
+  }, [isTurning, playSlotAudio, slotAt, stop]);
 
   const onButton = useCallback(
     (id: SoundId) => {
@@ -234,6 +253,9 @@ export default function ThreeBookReader({ book }: { book: SharedBook }) {
         onButton={onButton}
         textures={textures}
         stopTimes={stopTimes}
+        photo={photo}
+        onPhotoChange={changePhoto}
+        photoControls={stop === pocketStop && !isTurning}
       />
 
       <div

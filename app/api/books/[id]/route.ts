@@ -18,6 +18,6 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     }
 
     const message = error instanceof Error ? error.message : "Unable to delete the book.";
-    return Response.json({ error: message }, { status: message === "Book not found." ? 404 : 400 });
+    return Response.json({ error: message }, { status: 400 });
   }
 }
