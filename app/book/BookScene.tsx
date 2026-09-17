@@ -201,6 +201,9 @@ function BookModel({
       })
     | null;
 
+  /** Where the fit put the camera, which the pan clamp measures strays against. */
+  const home = useRef<{ target: THREE.Vector3; distance: number } | null>(null);
+
   /**
    * The mixer is rooted on the loaded scene rather than on a ref, so the
    * action exists from the very first render. (drei's `useAnimations`
@@ -489,7 +492,36 @@ function BookModel({
       controls.maxDistance = distance * 1.4;
       controls.update();
     }
-  }, [camera, controls, fit, size.width, size.height]);
+    home.current = { target, distance };
+  }, [camera, controls, fit, home, size.width, size.height]);
+
+  /* --------------------------------------------------------------- *
+   * Panning has to reach the far edge of a zoomed-in spread without
+   * letting the book be flung off screen, so the target is tethered:
+   * it may stray by as much of the book as the frame has cropped away,
+   * which is nothing at all once the whole book is back in view.
+   * --------------------------------------------------------------- */
+  useFrame(() => {
+    if (!controls) return;
+    const base = home.current;
+    if (!base) return;
+
+    const cropped = Math.max(0, 1 - camera.position.distanceTo(controls.target) / base.distance);
+    const slack = new THREE.Vector3(fit.half.x, fit.half.y, fit.half.z).multiplyScalar(cropped);
+    const strayed = controls.target.clone().sub(base.target);
+
+    const reined = new THREE.Vector3(
+      THREE.MathUtils.clamp(strayed.x, -slack.x, slack.x),
+      THREE.MathUtils.clamp(strayed.y, -slack.y, slack.y),
+      THREE.MathUtils.clamp(strayed.z, -slack.z, slack.z),
+    );
+    if (reined.equals(strayed)) return;
+
+    // Carry the camera along, so reining in the target slides rather than swivels.
+    const correction = reined.sub(strayed);
+    controls.target.add(correction);
+    camera.position.add(correction);
+  });
 
   /* --------------------------------------------------------------- *
    * Page turning.
@@ -810,7 +842,19 @@ export default function BookScene({
         makeDefault
         enableDamping
         dampingFactor={0.09}
-        enablePan={false}
+        /*
+         * Zoomed in, the spread is wider than a phone screen, so sliding
+         * across to read the far page has to be the one-finger gesture;
+         * orbiting moves to two fingers, beside the pinch. Panning drags
+         * the target sideways, which `PanClamp` reins back in.
+         */
+        screenSpacePanning={false}
+        touches={{ ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE }}
+        mouseButtons={{
+          LEFT: THREE.MOUSE.ROTATE,
+          MIDDLE: THREE.MOUSE.DOLLY,
+          RIGHT: THREE.MOUSE.PAN,
+        }}
         minPolarAngle={0.2}
         maxPolarAngle={Math.PI / 2.15}
         minAzimuthAngle={-Math.PI / 3.2}
