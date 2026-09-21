@@ -63,10 +63,82 @@ export function playSound(id: SoundId) {
  * Synthesis
  * ------------------------------------------------------------------ */
 
+/** Dev-only trace of what the audio context did, read via `__audioLog`. */
+function report(...parts: unknown[]) {
+  if (process.env.NODE_ENV === "production" || typeof window === "undefined") return;
+  const scope = window as unknown as { __audioLog?: unknown[] };
+  (scope.__audioLog ??= []).push(parts.join(" "));
+  console.info("[sound]", ...parts);
+}
+
 let context: AudioContext | null = null;
 let output: GainNode | null = null;
 let noise: AudioBuffer | null = null;
+let unlocked = false;
 
+/** Taps the output so a press can be checked for signal actually leaving it. */
+let analyser: AnalyserNode | null = null;
+let probe: Float32Array<ArrayBuffer> | null = null;
+
+/** Listeners told whether the device turned out to be silent. */
+const mutedListeners = new Set<(muted: boolean) => void>();
+let reportedMuted = false;
+
+/**
+ * Subscribes to "the device appears to be muted". The ring/silent switch is
+ * not readable from the web -- iOS exposes no API for it -- so it is inferred:
+ * the context is running and a sound was scheduled, yet no signal reaches the
+ * analyser. That is only ever true when the hardware is silencing playback.
+ */
+export function onMuted(listener: (muted: boolean) => void) {
+  mutedListeners.add(listener);
+  return () => {
+    mutedListeners.delete(listener);
+  };
+}
+
+/** Only iOS silences Web Audio via a hardware switch, so only it is inspected. */
+export const isIOS = () =>
+  typeof navigator !== "undefined" &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    // iPadOS 13+ reports itself as a Mac, but is the only "Mac" with touch.
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+
+/**
+ * Watches the analyser for a short window after a press. If nothing but
+ * silence comes through while the context is running, the device is muted.
+ */
+function watchForSilence() {
+  if (!analyser || !probe || reportedMuted || !isIOS()) return;
+
+  const deadline = performance.now() + 600;
+  const tap = analyser;
+  const buffer = probe;
+
+  const check = () => {
+    tap.getFloatTimeDomainData(buffer);
+    for (let i = 0; i < buffer.length; i++) {
+      // Any real signal means playback is audible; stop watching.
+      if (Math.abs(buffer[i]) > 0.0005) return;
+    }
+    if (performance.now() < deadline) {
+      requestAnimationFrame(check);
+      return;
+    }
+    reportedMuted = true;
+    report("muted-detected");
+    for (const listener of mutedListeners) listener(true);
+  };
+
+  requestAnimationFrame(check);
+}
+
+/**
+ * Builds the context and its output chain. Kept synchronous: iOS Safari only
+ * unlocks audio when the context is created and started inside the call stack
+ * of a real user gesture, so awaiting anything here loses the gesture and
+ * leaves the context suspended forever.
+ */
 function audio() {
   if (typeof window === "undefined") return null;
 
@@ -79,11 +151,45 @@ function audio() {
     context = new Context();
     output = context.createGain();
     output.gain.value = 0.55;
-    output.connect(context.createDynamicsCompressor()).connect(context.destination);
+
+    // The analyser sits after the compressor so it sees exactly what is sent
+    // to the speakers, and is a pure tap -- it does not alter the signal.
+    analyser = context.createAnalyser();
+    analyser.fftSize = 2048;
+    probe = new Float32Array(analyser.fftSize);
+    output.connect(context.createDynamicsCompressor()).connect(analyser).connect(context.destination);
   }
 
-  if (context.state === "suspended") void context.resume();
+  // Safari can drop back to "interrupted" (a phone call, the ring/silent
+  // switch, a backgrounded tab), so this is retried on every press rather
+  // than only once. The promise is deliberately not awaited.
+  if (context.state !== "running") void context.resume();
+
+  report("audio", context.state, context.currentTime.toFixed(3));
   return { ctx: context, out: output! };
+}
+
+/**
+ * Unlocks audio from a genuine DOM gesture. iOS Safari ignores gestures that
+ * arrive through react-three-fiber's raycasting handlers, so the canvas gets
+ * its own native listener and this runs before any button is resolved.
+ *
+ * It also plays one silent sample, which is what actually flips iOS out of its
+ * locked state -- `resume()` alone is not always enough.
+ */
+export function unlockAudio() {
+  const graph = audio();
+  if (!graph) return;
+  const { ctx } = graph;
+
+  if (unlocked) return;
+  unlocked = true;
+
+  const silent = ctx.createBufferSource();
+  silent.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+  silent.connect(ctx.destination);
+  silent.start(0);
+  report("unlock", ctx.state);
 }
 
 function noiseBuffer(ctx: AudioContext) {
@@ -250,8 +356,13 @@ function beep(ctx: AudioContext, out: AudioNode) {
 
 function synthesise(id: SoundId) {
   const graph = audio();
-  if (!graph) return;
+  if (!graph) {
+    report("no-graph", id);
+    return;
+  }
   const { ctx, out } = graph;
+  report("synthesise", id, ctx.state);
+  watchForSilence();
 
   switch (id) {
     case "whistle":

@@ -11,11 +11,13 @@ import {
   PartyPopper,
   RotateCcw,
   Ticket,
+  VolumeX,
+  X,
 } from "lucide-react";
 import BookScene from "./book/BookScene";
 import { hintAt, nextLabel, previousLabel, type Hint } from "./book/guide";
 import { clearPhoto, loadPhoto, savePhoto } from "./book/photo";
-import { SOUNDS, decalUrl, playSound, type SoundId } from "./book/sounds";
+import { SOUNDS, decalUrl, onMuted, playSound, type SoundId } from "./book/sounds";
 import {
   FIRST_STOP,
   LAST_STOP,
@@ -79,6 +81,7 @@ export default function BookExperience() {
   const [isTurning, setIsTurning] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [toast, setToast] = useState<{ id: SoundId; key: number } | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
   // The keepsake photo lives in localStorage; nothing about it is prerendered.
   const [photo, setPhoto] = useState<string | null>(() => loadPhoto());
 
@@ -148,6 +151,10 @@ export default function BookExperience() {
     const timer = window.setTimeout(() => setToast(null), 1600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  // iOS gives no way to read the ring/silent switch, so the sound module
+  // reports when a press produced no audible output and this explains why.
+  useEffect(() => onMuted(setIsMuted), []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -232,12 +239,40 @@ export default function BookExperience() {
 
       {/* Controls sit under the book, clear of the model itself. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-3 p-4 sm:p-6">
+        {/* The ring/silent switch mutes Web Audio in Safari, and no code can
+            turn it back on, so the reader is told where to reach instead. */}
+        {isMuted && (
+          <div
+            role="status"
+            className="pointer-events-auto flex max-w-sm items-start gap-3 rounded-2xl border border-[#ddcdb0] bg-[#fdf8ee]/95 py-3 pl-3.5 pr-3 text-left shadow-[0_10px_34px_rgba(74,58,36,0.18)] backdrop-blur-md"
+          >
+            <VolumeX aria-hidden className="mt-0.5 size-5 shrink-0 text-[#b4542f]" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold leading-snug text-[#3b3225]">
+                Your phone is on silent
+              </p>
+              <p className="mt-0.5 text-xs leading-snug text-[#7a6a52]">
+                Flip the switch on the left edge of your iPhone, then turn the volume up to
+                hear the book.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsMuted(false)}
+              aria-label="Dismiss"
+              className="cursor-pointer rounded-full p-1 text-[#8a6a45] transition hover:bg-[#eadfc8] active:scale-95"
+            >
+              <X aria-hidden className="size-4" />
+            </button>
+          </div>
+        )}
+
         <div className="relative flex flex-col items-center gap-3">
           <div
             aria-live="polite"
             className="pointer-events-none absolute bottom-full left-1/2 mb-3 -translate-x-1/2 whitespace-nowrap"
           >
-            {toast && (
+            {toast && !isMuted && (
               <p
                 key={toast.key}
                 className="animate-[toast_1.6s_ease-out_forwards] rounded-full bg-[#2c6350] px-4 py-1.5 text-sm font-semibold text-white shadow-[0_8px_24px_rgba(44,99,80,0.35)]"

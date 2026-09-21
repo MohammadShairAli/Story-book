@@ -12,7 +12,7 @@ import { ContactShadows, Environment, Lightformer, OrbitControls, useGLTF } from
 import { SkeletonUtils } from "three-stdlib";
 import * as THREE from "three";
 import PhotoSlot, { PHOTO_PAGE_MATERIAL, PHOTO_PAGE_TEXTURE, measurePhotoFrame } from "./PhotoSlot";
-import { soundForTexture, type SoundId } from "./sounds";
+import { soundForTexture, unlockAudio, type SoundId } from "./sounds";
 import { CLIP_NAME, CLIP_STOPS, MODEL_PATH, STOPS, poseAt, turnRateTo } from "./timeline";
 
 /** The book is rescaled so its widest pose measures this across. */
@@ -648,6 +648,23 @@ function BookModel({
   // Once the book is turned over its sound module faces the table, so the buttons stop responding.
   const buttonFrom = (event: ThreeEvent<PointerEvent>) =>
     poseAt(turn.current.time).flip > 0.02 ? null : (buttons.byObject.get(event.object) ?? null);
+
+  /**
+   * iOS Safari only unlocks Web Audio from a real DOM gesture, and it does not
+   * count the synthetic events react-three-fiber raises from its raycaster. A
+   * native listener on the canvas therefore unlocks the context first, before
+   * the press is resolved to a button.
+   */
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const unlock = () => unlockAudio();
+    canvas.addEventListener("pointerdown", unlock);
+    canvas.addEventListener("touchstart", unlock, { passive: true });
+    return () => {
+      canvas.removeEventListener("pointerdown", unlock);
+      canvas.removeEventListener("touchstart", unlock);
+    };
+  }, [gl]);
 
   // Dev-only: where each button sits on screen, so scripts can click them.
   useEffect(() => {

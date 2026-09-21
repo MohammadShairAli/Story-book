@@ -20,6 +20,19 @@ export const PHOTO_PAGE_MATERIAL = "6";
 export const PHOTO_CARD_BONE = "lid";
 
 /**
+ * Camera distance, in world units, at which the overlaid controls render at
+ * their natural pixel size; nearer or further they scale in proportion.
+ *
+ * The camera is pulled back to fit the book into the viewport, so it sits
+ * around 4.4 units away on a desktop but nearly 12 on a phone, where the
+ * frame is much narrower. Fixed-pixel HTML therefore keeps its size while the
+ * book shrinks by about a third, which is what made the button swamp the
+ * pocket. Matching this to the desktop distance leaves that view as it was and
+ * scales the controls down in step with the book everywhere narrower.
+ */
+const HTML_DISTANCE = 4.4;
+
+/**
  * The pocket rectangle, in the local space of the page-6 mesh. `right` and
  * `down` follow the page artwork, so a photo laid along them reads upright.
  */
@@ -334,20 +347,23 @@ export default function PhotoSlot({
         </>
       )}
 
+      {/* `distanceFactor` ties the overlay to the scene's perspective, so it
+          scales with the book instead of staying at fixed screen pixels --
+          otherwise it swamps the pocket on a narrow phone viewport. */}
       {showControls && !photo && (
-        <Html center position={centre} zIndexRange={[15, 0]}>
-          <div className="flex w-64 flex-col items-center gap-2">
+        <Html center position={centre} zIndexRange={[15, 0]} distanceFactor={HTML_DISTANCE}>
+          <div className="flex w-max max-w-[16rem] flex-col items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={() => input.current?.click()}
               disabled={busy}
-              className="cursor-pointer flex items-center gap-2 whitespace-nowrap rounded-full bg-[#2c6350] px-5 py-3 text-base font-semibold text-white shadow-[0_10px_28px_rgba(44,99,80,0.35)] transition hover:bg-[#23513f] active:scale-95 disabled:opacity-60"
+              className="cursor-pointer flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#2c6350] px-3 py-1.5 text-xs font-semibold text-white shadow-[0_6px_18px_rgba(44,99,80,0.35)] transition hover:bg-[#23513f] active:scale-95 disabled:opacity-60 sm:gap-2 sm:px-5 sm:py-3 sm:text-base sm:shadow-[0_10px_28px_rgba(44,99,80,0.35)]"
             >
-              <ImagePlus aria-hidden size={20} strokeWidth={2.2} />
+              <ImagePlus aria-hidden className="h-3.5 w-3.5 sm:h-5 sm:w-5" strokeWidth={2.2} />
               {busy ? "Adding photo…" : "Add your photo"}
             </button>
             {error && (
-              <p className="rounded-xl bg-[#fdf8ee] px-3 py-2 text-center text-xs font-medium text-[#9b3b2a] shadow-md">
+              <p className="rounded-lg bg-[#fdf8ee] px-2 py-1.5 text-center text-[10px] font-medium leading-snug text-[#9b3b2a] shadow-md sm:rounded-xl sm:px-3 sm:py-2 sm:text-xs">
                 {error}
               </p>
             )}
@@ -357,15 +373,15 @@ export default function PhotoSlot({
       )}
 
       {showControls && photo && selected && (
-        <Html center position={corner} zIndexRange={[15, 0]}>
+        <Html center position={corner} zIndexRange={[15, 0]} distanceFactor={HTML_DISTANCE}>
           <button
             type="button"
             onClick={remove}
             aria-label="Remove photo"
             title="Remove photo"
-            className="cursor-pointer flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#c0392b] py-2 pl-2.5 pr-3.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(192,57,43,0.35)] transition hover:bg-[#a93226] active:scale-95"
+            className="cursor-pointer flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#c0392b] p-1.5 text-xs font-semibold text-white shadow-[0_5px_14px_rgba(192,57,43,0.35)] transition hover:bg-[#a93226] active:scale-95 sm:p-2 sm:text-sm sm:shadow-[0_8px_22px_rgba(192,57,43,0.35)]"
           >
-            <X aria-hidden size={16} strokeWidth={2.8} />
+            <X aria-hidden className="h-3 w-3 sm:h-4 sm:w-4" strokeWidth={2.8} />
           </button>
         </Html>
       )}
