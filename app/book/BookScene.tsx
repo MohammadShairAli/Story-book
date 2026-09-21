@@ -22,6 +22,14 @@ const BOOK_WIDTH = 2.6;
 const MARGIN = 1.06;
 
 /**
+ * How much of the book has to be cropped out of frame before one finger
+ * stops orbiting and starts panning. A little above zero, so that easing
+ * back to the fully zoomed-out view hands orbiting back rather than
+ * leaving a sliver of pan that the tether immediately undoes.
+ */
+const PAN_TAKEOVER = 0.06;
+
+/**
  * Screen space kept clear for the overlaid header and control bar, so the
  * book is framed in the area between them rather than underneath them.
  */
@@ -198,6 +206,7 @@ function BookModel({
         update: () => void;
         minDistance: number;
         maxDistance: number;
+        touches: { ONE: THREE.TOUCH; TWO: THREE.TOUCH };
       })
     | null;
 
@@ -507,6 +516,23 @@ function BookModel({
     if (!base) return;
 
     const cropped = Math.max(0, 1 - camera.position.distanceTo(controls.target) / base.distance);
+
+    /*
+     * With the whole book in view the clamp below allows no stray at all, so
+     * a one-finger pan would rein straight back and read as a dead model.
+     * There, one finger orbits instead -- the desktop left-drag gesture --
+     * and only hands over to panning once zooming has cropped enough of the
+     * spread away for sliding across to the far page to be the useful drag.
+     * The switch is deliberately not applied mid-gesture: OrbitControls
+     * latches its handler on touchstart, so flipping this while a finger is
+     * down cannot strand a drag halfway.
+     */
+    const wantsPan = cropped > PAN_TAKEOVER;
+    const oneFinger = wantsPan ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
+    if (controls.touches.ONE !== oneFinger) {
+      controls.touches = { ONE: oneFinger, TWO: THREE.TOUCH.DOLLY_ROTATE };
+    }
+
     const slack = new THREE.Vector3(fit.half.x, fit.half.y, fit.half.z).multiplyScalar(cropped);
     const strayed = controls.target.clone().sub(base.target);
 
@@ -860,13 +886,15 @@ export default function BookScene({
         enableDamping
         dampingFactor={0.09}
         /*
-         * Zoomed in, the spread is wider than a phone screen, so sliding
-         * across to read the far page has to be the one-finger gesture;
-         * orbiting moves to two fingers, beside the pinch. Panning drags
-         * the target sideways, which `PanClamp` reins back in.
+         * One finger orbits while the whole book is in view, and becomes a
+         * pan once zooming crops the spread wider than the screen, so that
+         * sliding across to read the far page stays a one-finger gesture.
+         * `BookModel`'s tether frame owns that swap, since it already
+         * measures how much of the book the frame has cropped away; the
+         * value set here is only the starting, fully-zoomed-out binding.
          */
         screenSpacePanning={false}
-        touches={{ ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE }}
+        touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE }}
         mouseButtons={{
           LEFT: THREE.MOUSE.ROTATE,
           MIDDLE: THREE.MOUSE.DOLLY,
